@@ -1,0 +1,3 @@
+# Build-Artefakt — wird nur als Release-Asset verteilt (Spec 8.1/8.3)
+sparqlquery_bundle.sas
+dist/

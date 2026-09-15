@@ -1,0 +1,16 @@
+{
+  "head": { "vars": [ "person", "name", "age" ] },
+  "results": {
+    "bindings": [
+      {
+        "person": { "type": "uri", "value": "http://example.org/alice" },
+        "name":   { "type": "literal", "xml:lang": "en", "value": "Alice" },
+        "age":    { "type": "literal", "datatype": "http://www.w3.org/2001/XMLSchema#integer", "value": "30" }
+      },
+      {
+        "person": { "type": "bnode", "value": "b0" },
+        "name":   { "type": "literal", "value": "Bob" }
+      }
+    ]
+  }
+}

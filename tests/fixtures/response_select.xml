@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetische SPARQL-Results-XML-Fixture (Spec 6.3).
+     Muss dieselbe tidy-Tabelle ergeben wie response_select.json. -->
+<sparql xmlns="http://www.w3.org/2005/sparql-results#">
+  <head>
+    <variable name="person"/>
+    <variable name="name"/>
+    <variable name="age"/>
+  </head>
+  <results>
+    <result>
+      <binding name="person"><uri>http://example.org/alice</uri></binding>
+      <binding name="name"><literal xml:lang="en">Alice</literal></binding>
+      <binding name="age"><literal datatype="http://www.w3.org/2001/XMLSchema#integer">30</literal></binding>
+    </result>
+    <result>
+      <binding name="person"><bnode>b0</bnode></binding>
+      <binding name="name"><literal>Bob</literal></binding>
+      <!-- age ungebunden -> im tidy-Dataset KEINE Zeile -->
+    </result>
+  </results>
+</sparql>

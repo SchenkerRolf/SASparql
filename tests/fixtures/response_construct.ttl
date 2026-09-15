@@ -1,0 +1,11 @@
+# Synthetische CONSTRUCT/DESCRIBE-Turtle-Fixture (Spec 6.3).
+# Wird bei CONSTRUCT/DESCRIBE reiner Dateitransfer, keine SAS-Konvertierung.
+@prefix ex:   <http://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+ex:alice a foaf:Person ;
+    foaf:name "Alice"@en ;
+    foaf:knows ex:bob .
+
+ex:bob a foaf:Person ;
+    foaf:name "Bob" .
