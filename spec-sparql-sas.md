@@ -46,7 +46,7 @@ Unterstützt werden müssen, orthogonal kombinierbar:
 | Frage (ehem. offen) | Entscheid |
 |---|---|
 | SELECT/ASK-Ergebnisformat | **Beides**: XML (`application/sparql-results+xml`) und JSON (`application/sparql-results+json`), steuerbar über neuen Parameter `resultformat=XML\|JSON` (Default `XML`) |
-| Parsing-Technik XML | **XML-Libname-Engine** (`libname x xml "...";`) — seit SAS 9.2 verfügbar, unter 9.4 uneingeschränkt einsetzbar. Keine SXLE-Map-Datei mehr nötig. |
+| Parsing-Technik XML | **XMLV2-Libname-Engine** (`libname x xmlv2 ...;`). **Korrektur (server-verifiziert 2026-09-15):** Automap scheitert an der SPARQL-Results-XML-Struktur (polymorphe `<binding>`-Kindelemente + Default-Namespace) mit `ERROR: XML data is not in a format supported natively...`. Es wird daher doch eine **explizite XML-Map** verwendet (generiert zur Laufzeit in `sparql_parse_response`), zusammen mit einem vorgelagerten Entfernen des Default-Namespace aus dem Rohtext. |
 | Parsing-Technik JSON | **JSON-Libname-Engine** (`libname x json "...";`) — ab **SAS 9.4M4** verfügbar; Zielserver ist ≥ 9.4M4, daher einsetzbar. |
 | SAS-Version/Umgebung | **SAS 9.4M4+**, serverbasiert (siehe oben) |
 | Session-Encoding | **WLATIN1 / SBCS** (Windows-SAS). Antworten sind UTF-8 → Response-Fileref und XML/JSON-Libname explizit mit `encoding="utf-8"` lesen/transcodieren. |
@@ -486,6 +486,23 @@ UTF-8-gelesen; Proxy-Auth via `PROXYUSERNAME=`/`PROXYPASSWORD=` (ab 9.4M4).
 Micro-Defaults: ungebundene Variablen → keine Zeile; ASK → 1-Zeilen-`boolean`-
 Dataset. Alle geklärten Punkte sind in die Parameter- und
 Validierungsdefinitionen (Abschnitte 3 und 5) eingeflossen.
+
+**Server-Verifikation (2026-09-15, SAS 9.4M4 gegen die Fixtures aus 6.3)
+abgeschlossen — T0–T4 alle [PASS].** Dabei geklärt:
+- XML-Automap scheitert (s. Korrektur in 2.1); explizite XML-Map + Entfernen
+  des Default-Namespace ist der tragfähige Weg.
+- `ridx` bei XML kommt nicht aus der Map, sondern aus einer Gruppenwechsel-
+  Erkennung im DATA-Step (SPARQL bindet eine Variable nie zweimal im selben
+  `<result>`).
+- JSON-Automap legt pro SPARQL-Variable ein eigenes Member
+  `BINDINGS_<UPPERCASE(Variable)>` an; die korrekte Schreibweise der Variable
+  steht in Member `HEAD_VARS`.
+- `resultdsn` wird bei SELECT nach `ridx`/`var` sortiert, damit XML- und
+  JSON-Pfad trotz unterschiedlicher natürlicher Zeilenreihenfolge dasselbe
+  Ergebnis für `PROC COMPARE` liefern.
+- Noch offen: Verifikation gegen einen echten SPARQL-Endpunkt (nicht nur
+  Fixtures) für GET/`urlencode()` und Proxy-Optionen (s. VERIFY-Kommentare in
+  `sparql_execute.sas`).
 
 ---
 

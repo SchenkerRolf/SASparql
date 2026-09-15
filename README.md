@@ -4,9 +4,10 @@ SAS-Makropaket, das SPARQL-Abfragen gegen einen HTTP(S)-Endpunkt ausführt und
 das Ergebnis als SAS-Dataset (SELECT/ASK) bzw. als RDF-Datei
 (CONSTRUCT/DESCRIBE) bereitstellt.
 
-> **Status:** In Entwicklung. Alle vier Makros sind implementiert, aber noch
-> **nicht gegen eine laufende SAS-9.4M4-Instanz verifiziert** — die
-> fixture-basierten Tests in [`tests/`](tests/) prüfen das auf dem Server.
+> **Status:** In Entwicklung. Alle vier Makros sind implementiert und gegen
+> eine laufende SAS-9.4M4-Instanz mit den fixture-basierten Tests aus
+> [`tests/`](tests/) verifiziert (2026-09-15, T0–T4 alle [PASS]). Noch offen:
+> Verifikation gegen einen echten SPARQL-Endpunkt (GET/Proxy-Optionen).
 > Verbindliche Spezifikation: [`spec-sparql-sas.md`](spec-sparql-sas.md).
 
 ---
@@ -276,4 +277,7 @@ Nur für Mitarbeit am Paket selbst (nicht für die Nutzung nötig):
 
 - **Unreleased** — Repo-Struktur, Spec, Fixtures, Build-Infrastruktur;
   Implementierung aller vier Makros (build_request, execute, parse_response,
-  sparqlquery) inkl. Test-Harness T0–T4. Noch nicht server-verifiziert.
+  sparqlquery) inkl. Test-Harness T0–T4. Server-verifiziert gegen SAS 9.4M4
+  (2026-09-15): XML-Parsing auf explizite XML-Map umgestellt (Automap
+  scheitert an der SPARQL-Results-Struktur), JSON-Parsing an die tatsächliche
+  Automap-Struktur angepasst (ein Member je SPARQL-Variable).

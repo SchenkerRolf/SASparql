@@ -4,11 +4,18 @@
             SELECT/ASK -> SAS-Dataset (langes/tidy Schema);
             CONSTRUCT/DESCRIBE -> RDF-Datei durchreichen.
  Autor    : <TODO>
- Version  : 0.2.0
+ Version  : 0.3.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.3
    2026-09-14  impl   Validierung (V5/V6/V9/V10) + SELECT/ASK/CONSTRUCT
+   2026-09-15  verify Server-Verifikation gg. SAS 9.4M4: XML-Automap durch
+                       explizite XML-Map ersetzt (Automap scheitert an der
+                       SPARQL-Results-Struktur); ridx bei XML per
+                       Gruppenwechsel-Erkennung statt Map-INDEX; JSON-Zweig
+                       an tatsaechliche Automap-Struktur angepasst (Member
+                       BINDINGS_<VAR> je Variable); resultdsn bei SELECT
+                       nach ridx/var sortiert (Engine-unabhaengige Reihenfolge)
 
  Parameter (siehe Spec 3.3):
    in_fileref=        (req)  Fileref mit Response-Body (utf-8 empfohlen).
@@ -29,10 +36,16 @@
    gelesen (Session ist WLATIN1, Spec 2). Zeichen ausserhalb WLATIN1 gehen
    dabei verloren (dokumentierte Grenze).
 
- VERIFY (ohne SAS-Runtime nicht endgueltig pruefbar): die exakten Member-/
-   Spaltennamen der XML-/JSON-Libname-Engines werden zur Laufzeit aus
-   dictionary.columns entdeckt; die mit "VERIFY" markierten Annahmen sind am
-   SAS-9.4M4-Server gegen die Fixtures (tests/) zu bestaetigen.
+ VERIFY-Stand (2026-09-15, server-verifiziert gegen SAS 9.4M4 + Fixtures):
+   - JSON-Automap: Struktur bestaetigt (ein Member BINDINGS_<VAR> je SPARQL-
+     Variable, Spalte ordinal_bindings = ridx; Variablennamen selbst aus
+     Member HEAD_VARS). Siehe SELECT+JSON-Zweig unten.
+   - XML: Automap scheitert an der SPARQL-Results-XML-Struktur; es wird eine
+     explizite XML-Map verwendet (nach Entfernen des Default-Namespace).
+     ridx kommt NICHT aus der Map (INDEX-Element dort ungueltig), sondern
+     aus einer Gruppenwechsel-Erkennung im DATA-Step. Noch offen: ob diese
+     Annahmen auch gegen einen echten Fuseki-Server (nicht nur Fixtures)
+     halten, insbesondere Dokumentordnung und Zeichen-Escaping.
 
  Rueckgabe:
    &sparql_rc (0=ok, 1=Parameterfehler, 3=Parse-Fehler), &sparql_msg
@@ -53,6 +66,35 @@
 &r
 %mend sparql_hascol;
 
+/* Debug-Hilfsmakro: dumpt Member/Spalten/Werte eines Libname komplett via
+   %put/put _all_ ins LOG (PROC PRINT/PROC SQL-Listing landet z. B. in
+   Enterprise Guide im Ergebnisfenster, nicht im Log - deshalb kein PRINT). */
+%macro _sq_dbgdump(libref);
+  %local _dm _dn _di _dmem _dcols;
+  proc sql noprint;
+    select memname into :_dm separated by ' '
+      from dictionary.tables where libname="%upcase(&libref)";
+  quit;
+  %put NOTE: DEBUG &libref Member: &_dm;
+  %let _dn = 0;
+  %if (%length(&_dm) > 0) %then %let _dn = %sysfunc(countw(&_dm));
+  %do _di = 1 %to &_dn;
+    %let _dmem = %scan(&_dm, &_di);
+    %let _dcols = ;
+    proc sql noprint;
+      select name into :_dcols separated by ' '
+        from dictionary.columns
+        where libname="%upcase(&libref)" and memname="&_dmem"
+        order by varnum;
+    quit;
+    %put NOTE: DEBUG &libref..&_dmem Spalten: &_dcols;
+    data _null_;
+      set &libref..&_dmem;
+      put _all_;
+    run;
+  %end;
+%mend _sq_dbgdump;
+
 
 %macro sparql_parse_response(in_fileref=, queryform=SELECT, resultformat=,
                             resultdsn=queryresult, resultfile=,
@@ -62,8 +104,9 @@
   %let sparql_rc  = 0;
   %let sparql_msg = ;
 
-  %local macnm inpath fr lib bmem btype vcols ordcol xlang xdtype
-         i nv vcol pfx np tok ok
+  %local macnm inpath fr lib bmem btype
+         i vcol np tok ok
+         hvcols nhv vname mem ntabs
          L_VAR L_VALUE L_TYPE L_DTYPE L_LANG;
   %let macnm = sparql_parse_response;
 
@@ -194,24 +237,81 @@
   /* ================= SELECT / ASK: Libname mit utf-8 lesen =========== */
   filename _spin "&inpath" encoding="utf-8";
 
+  /* Explizite XML-Map fuer SPARQL-Results-XML, in zwei Schritten:
+     1) Default-Namespace (xmlns="http://www.w3.org/2005/sparql-results#")
+        aus dem Rohtext entfernen (server-verifiziert noetig, sonst
+        "XMLMap is not properly formed. No TABLE element encountered.").
+     2) Namespace-freie Map ueber die vereinfachte Kopie legen.
+     ridx wird NICHT ueber die Map ermittelt (ein <INDEX/> auf den <result>-
+     Elternpfad scheiterte server-verifiziert mit "Expecting COLUMN
+     collection element, found INDEX." - kein gueltiger Map-Bestandteil an
+     dieser Stelle), sondern unten per Gruppenwechsel-Erkennung im DATA-Step:
+     SPARQL bindet eine Variable nie zweimal im selben <result> - taucht ein
+     Bindungsname innerhalb der laufenden Gruppe erneut auf, beginnt ein
+     neues <result>. */
+  %if (&resultformat = XML) %then %do;
+    filename _spinx temp encoding="utf-8";
+    /* Gepuffertes zeilenweises Lesen statt recfm=n: recfm=n ist laut SAS-Log
+       "UNBUFFERED" (Byte-fuer-Byte-I/O) und blieb server-verifiziert gegen
+       den UNC-Fixture-Pfad haengen (2026-09-15). Fuer eine reine Text-
+       ersetzung reicht gepuffertes INFILE/FILE wie beim JSON/XML-Libname
+       selbst (das liest denselben UNC-Pfad ja bereits erfolgreich). */
+    data _null_;
+      length _line $32767;
+      infile "&inpath" encoding="utf-8" lrecl=32767 pad;
+      file  _spinx     encoding="utf-8" lrecl=32767;
+      input;
+      _line = tranwrd(_infile_, ' xmlns="http://www.w3.org/2005/sparql-results#"', ' ');
+      put _line;
+    run;
+
+    filename _sqxmap temp;
+    data _null_;
+      file _sqxmap;
+      put '<SXLEMAP version="2.1" name="SPARQLRESULT">';
+      put '<TABLE name="ASKRESULT">';
+      put '<TABLE-PATH syntax="XPath">/sparql</TABLE-PATH>';
+      put '<COLUMN name="boolean"><PATH syntax="XPath">/sparql/boolean</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>5</LENGTH></COLUMN>';
+      put '</TABLE>';
+      put '<TABLE name="BINDING">';
+      put '<TABLE-PATH syntax="XPath">/sparql/results/result/binding</TABLE-PATH>';
+      put '<COLUMN name="name"><PATH syntax="XPath">/sparql/results/result/binding/@name</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>256</LENGTH></COLUMN>';
+      put '<COLUMN name="uri"><PATH syntax="XPath">/sparql/results/result/binding/uri</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>4000</LENGTH></COLUMN>';
+      put '<COLUMN name="bnode"><PATH syntax="XPath">/sparql/results/result/binding/bnode</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>4000</LENGTH></COLUMN>';
+      put '<COLUMN name="literal"><PATH syntax="XPath">/sparql/results/result/binding/literal</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>4000</LENGTH></COLUMN>';
+      put '<COLUMN name="lit_lang"><PATH syntax="XPath">/sparql/results/result/binding/literal/@xml:lang</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>35</LENGTH></COLUMN>';
+      put '<COLUMN name="lit_datatype"><PATH syntax="XPath">/sparql/results/result/binding/literal/@datatype</PATH><TYPE>character</TYPE><DATATYPE>STRING</DATATYPE><LENGTH>1000</LENGTH></COLUMN>';
+      put '</TABLE>';
+      put '</SXLEMAP>';
+    run;
+  %end;
+
   /* ---------------------------- ASK -------------------------------- */
   %if (&queryform = ASK) %then %do;
     %let lib = ; %let bmem = ; %let btype = ;
     %if (&resultformat = XML) %then %do;
-      libname _xin xmlv2 xmlfileref=_spin;   /* VERIFY XMLV2-Struktur */
-      %let lib = _XIN;
+      libname _xin xmlv2 xmlfileref=_spinx xmlmap=_sqxmap;
+      %if (&debug = Y) %then %do; %_sq_dbgdump(_xin) %end;
+      %let lib  = _XIN;
+      %let bmem = ASKRESULT;
+      proc sql noprint;
+        select type into :btype trimmed
+          from dictionary.columns
+          where libname = "&lib" and memname = "&bmem" and upcase(name) = 'BOOLEAN';
+      quit;
     %end;
     %else %do;
       libname _jin json fileref=_spin;       /* VERIFY JSON-Struktur */
+      %if (&debug = Y) %then %do; %_sq_dbgdump(_jin) %end;
       %let lib = _JIN;
-    %end;
 
-    /* boolean-Spalte robust ueber alle Member entdecken. */
-    proc sql noprint;
-      select memname, type into :bmem trimmed, :btype trimmed
-        from dictionary.columns
-        where libname = "&lib" and upcase(name) = 'BOOLEAN';
-    quit;
+      /* boolean-Spalte robust ueber alle Member entdecken. */
+      proc sql noprint;
+        select memname, type into :bmem trimmed, :btype trimmed
+          from dictionary.columns
+          where libname = "&lib" and upcase(name) = 'BOOLEAN';
+      quit;
+    %end;
 
     %if (%length(&bmem) = 0) %then %do;
       %let sparql_rc  = 3;
@@ -234,20 +334,34 @@
 
   /* ------------------------- SELECT + JSON ------------------------- */
   %else %if (&resultformat = JSON) %then %do;
-    libname _jin json fileref=_spin;          /* VERIFY JSON-Struktur */
+    libname _jin json fileref=_spin;
+    %if (&debug = Y) %then %do; %_sq_dbgdump(_jin) %end;
 
-    /* Bindings-Member = das Member mit '<var>_value'-Spalten. */
-    %let bmem  = ;
-    %let vcols = ;
-    proc sql noprint;
-      select distinct memname into :bmem trimmed
-        from dictionary.columns
-        where libname = '_JIN'
-          and upcase(name) like '%\_VALUE' escape '\';
-    quit;
+    /* Struktur server-verifiziert (Log 2026-09-15): pro SPARQL-Variable X,
+       die in mind. einem Binding vorkommt, legt die JSON-Automap ein
+       eigenes Member BINDINGS_<UPPERCASE(X)> an, mit Spalten
+       ordinal_bindings (= ridx - Position im aeusseren results.bindings-
+       Array, korrekt auch wenn diese Variable nicht in jedem Result
+       gebunden ist), type, value, optional datatype/xml_lang - je nachdem,
+       ob im Datenbestand ueberhaupt vorhanden. Der exakte, gross-/klein-
+       schreibungsrichtige Variablenname X selbst steht NICHT im Membernamen
+       (SAS-Namen sind uppercase), sondern als Wert in Member HEAD_VARS
+       (Spalten vars1..varsN, aus head.vars). */
+    %let hvcols = ;
+    %let nhv    = 0;
+    %if (%sysfunc(exist(_jin.head_vars))) %then %do;
+      proc sql noprint;
+        select name into :hvcols separated by ' '
+          from dictionary.columns
+          where libname = '_JIN' and memname = 'HEAD_VARS'
+            and upcase(name) like 'VARS%'
+          order by varnum;
+      quit;
+      %let nhv = %sysfunc(countw(&hvcols));
+    %end;
 
-    %if (%length(&bmem) = 0) %then %do;
-      /* Leeres Result-Set -> leeres tidy-Dataset mit korrekter Struktur. */
+    %if (&nhv = 0) %then %do;
+      /* Keine Variablen in head.vars -> leeres tidy-Dataset. */
       data &resultdsn;
         length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
                datatype $&L_DTYPE lang $&L_LANG;
@@ -255,127 +369,114 @@
       run;
     %end;
     %else %do;
-      proc sql noprint;
-        select name into :vcols separated by ' '
-          from dictionary.columns
-          where libname = '_JIN' and memname = "&bmem"
-            and upcase(name) like '%\_VALUE' escape '\'
-          order by varnum;
-      quit;
-
-      data &resultdsn;
-        length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
-               datatype $&L_DTYPE lang $&L_LANG;
-        set _jin.&bmem;
-        ridx = _N_;   /* eine Quell-Obs pro Result-Zeile -> _N_ = Ergebnis-Index */
-        %let nv = %sysfunc(countw(&vcols, %str( )));
-        %do i = 1 %to &nv;
-          %let vcol = %scan(&vcols, &i, %str( ));
-          %let pfx  = %substr(&vcol, 1, %eval(%length(&vcol) - 6)); /* ohne _value */
-          if not missing(&vcol) then do;
-            var   = "&pfx";
-            value = &vcol;
-            %if %sparql_hascol(_jin.&bmem, &pfx._type) %then %do;
-              type = &pfx._type;
-              if type = 'typed-literal' then type = 'literal';
-            %end;
-            %else %do;
-              type = '';
-            %end;
-            %if %sparql_hascol(_jin.&bmem, &pfx._datatype) %then %do;
-              datatype = &pfx._datatype;
-            %end;
-            %else %do;
-              datatype = '';
-            %end;
-            %if %sparql_hascol(_jin.&bmem, &pfx._xml_lang) %then %do;
-              lang = &pfx._xml_lang;
-            %end;
-            %else %do;
-              lang = '';
-            %end;
-            output;
-          end;
+      /* Variablennamen (exakte Schreibweise) aus der einen HEAD_VARS-Zeile
+         in Makrovariablen _vn1.._vnN holen. */
+      data _null_;
+        set _jin.head_vars;
+        %do i = 1 %to &nhv;
+          %let vcol = %scan(&hvcols, &i, %str( ));
+          call symputx("_vn&i", &vcol, 'L');
         %end;
-        keep ridx var value type datatype lang;
       run;
+
+      %let ntabs = ;
+      %do i = 1 %to &nhv;
+        %let vname = %superq(_vn&i);
+        %let mem   = BINDINGS_%upcase(&vname);
+        %if (%sysfunc(exist(_jin.&mem))) %then %do;
+          %let ntabs = &ntabs _sqjv&i;
+          data _sqjv&i;
+            length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
+                   datatype $&L_DTYPE lang $&L_LANG;
+            set _jin.&mem;
+            ridx = ordinal_bindings;
+            var  = "&vname";
+            if type = 'typed-literal' then type = 'literal';
+            %if %sparql_hascol(_jin.&mem, xml_lang) %then %do;
+              lang = xml_lang;
+            %end;
+            keep ridx var value type datatype lang;
+          run;
+        %end;
+      %end;
+
+      %if (%length(&ntabs) = 0) %then %do;
+        data &resultdsn;
+          length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
+                 datatype $&L_DTYPE lang $&L_LANG;
+          stop;
+        run;
+      %end;
+      %else %do;
+        data &resultdsn;
+          set &ntabs;
+        run;
+        proc datasets lib=work nolist;
+          delete &ntabs;
+        quit;
+      %end;
     %end;
   %end;
 
   /* ------------------------- SELECT + XML -------------------------- */
   %else %do;
-    libname _xin xmlv2 xmlfileref=_spin;      /* VERIFY XMLV2-Struktur */
+    libname _xin xmlv2 xmlfileref=_spinx xmlmap=_sqxmap;
+    %if (&debug = Y) %then %do; %_sq_dbgdump(_xin) %end;
 
-    /* Binding-Member = hat 'name'-Spalte UND eine von uri/literal/bnode. */
-    %let bmem   = ;
-    %let ordcol = ;
-    %let xlang  = ;
-    %let xdtype = ;
-    proc sql noprint;
-      select distinct memname into :bmem trimmed
-        from dictionary.columns
-        where libname = '_XIN' and upcase(name) = 'NAME'
-          and memname in (select memname from dictionary.columns
-                          where libname = '_XIN'
-                            and upcase(name) in ('URI','LITERAL','BNODE'));
-    quit;
-
-    %if (%length(&bmem) = 0) %then %do;
+    /* Member/Spalten sind durch die explizite Map (oben) fest vorgegeben:
+       Member BINDING mit name/uri/bnode/literal/lit_lang/lit_datatype.
+       ridx kommt NICHT aus der Map, sondern per Gruppenwechsel-Erkennung
+       (s. Map-Kommentar oben): SPARQL bindet eine Variable nie zweimal im
+       selben <result> - ein wiederholter Bindungsname markiert eine neue
+       Gruppe. Setzt Dokumentordnung wie geliefert voraus (VERIFY). */
+    %if (%sysfunc(exist(_xin.binding)) = 0) %then %do;
       data &resultdsn;
         length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
                datatype $&L_DTYPE lang $&L_LANG;
         stop;
       run;
-      %put WARNING: &macnm.: kein Binding-Member im XML gefunden - leeres &resultdsn (VERIFY XMLV2-Struktur).;
+      %put WARNING: &macnm.: Member _XIN.BINDING wurde nicht erzeugt - leeres &resultdsn (VERIFY XML-Map).;
     %end;
     %else %do;
-      proc sql noprint;
-        select name into :ordcol trimmed
-          from dictionary.columns
-          where libname = '_XIN' and memname = "&bmem"
-            and upcase(name) like '%RESULT%ORDINAL%'
-          order by varnum;
-        select name into :xlang trimmed
-          from dictionary.columns
-          where libname = '_XIN' and memname = "&bmem"
-            and upcase(name) like '%LANG%';
-        select name into :xdtype trimmed
-          from dictionary.columns
-          where libname = '_XIN' and memname = "&bmem"
-            and upcase(name) = 'DATATYPE';
-      quit;
-
       data &resultdsn;
         length ridx 8 var $&L_VAR value $&L_VALUE type $&L_TYPE
-               datatype $&L_DTYPE lang $&L_LANG _done 8;
-        set _xin.&bmem;
-        %if (%length(&ordcol)) %then %do; ridx = &ordcol; %end;
-        %else %do; ridx = .; %end;
-        var   = name;
+               datatype $&L_DTYPE lang $&L_LANG _done 8 _seen $4000;
+        retain ridx 0 _seen '';
+        set _xin.binding;
+        var = name;
+        if index(_seen, '|' !! strip(var) !! '|') > 0 then do;
+          ridx  = ridx + 1;
+          _seen = '';
+        end;
+        else if ridx = 0 then ridx = 1;
+        _seen = strip(_seen) !! '|' !! strip(var) !! '|';
         _done = 0;
-        %if %sparql_hascol(_xin.&bmem, uri) %then %do;
-          if not _done and not missing(uri)   then do; type='uri';     value=uri;     _done=1; end;
-        %end;
-        %if %sparql_hascol(_xin.&bmem, bnode) %then %do;
-          if not _done and not missing(bnode) then do; type='bnode';   value=bnode;   _done=1; end;
-        %end;
-        %if %sparql_hascol(_xin.&bmem, literal) %then %do;
-          if not _done and not missing(literal) then do; type='literal'; value=literal; _done=1; end;
-        %end;
-        %if (%length(&xdtype)) %then %do; datatype = &xdtype; %end; %else %do; datatype = ''; %end;
-        %if (%length(&xlang))  %then %do; lang = &xlang;      %end; %else %do; lang = '';     %end;
+        if not _done and not missing(uri)     then do; type='uri';     value=uri;     _done=1; end;
+        if not _done and not missing(bnode)   then do; type='bnode';   value=bnode;   _done=1; end;
+        if not _done and not missing(literal) then do; type='literal'; value=literal; _done=1; end;
+        datatype = lit_datatype;
+        lang     = lit_lang;
         keep ridx var value type datatype lang;
       run;
-
-      %if (%length(&ordcol) = 0) %then
-        %put WARNING: &macnm.: keine RESULT-Ordinalspalte gefunden - ridx fehlt (VERIFY XMLV2-Struktur).;
     %end;
+  %end;
+
+  /* SELECT: einheitliche Zeilenreihenfolge unabhaengig von der Engine.
+     JSON liefert Zeilen variablenweise gruppiert (erst alle "person", dann
+     alle "name", ...), XML ergebnisweise (Dokumentordnung). Das zentrale
+     Abnahmekriterium (Spec 3.3/6.3, T1) vergleicht per PROC COMPARE ohne
+     Sortierung - deshalb hier fest nach ridx/var sortieren, damit beide
+     Engines dasselbe resultdsn liefern. */
+  %if (&sparql_rc = 0 and &queryform = SELECT and %sysfunc(exist(&resultdsn))) %then %do;
+    proc sort data=&resultdsn; by ridx var; run;
   %end;
 
   /* ================= Aufraeumen + Abschluss ========================= */
   %if (%sysfunc(libref(_jin))  = 0)  %then %do; libname _jin clear;  %end;
   %if (%sysfunc(libref(_xin))  = 0)  %then %do; libname _xin clear;  %end;
   %if (%sysfunc(fileref(_spin)) <= 0) %then %do; filename _spin clear; %end;
+  %if (%sysfunc(fileref(_sqxmap)) <= 0) %then %do; filename _sqxmap clear; %end;
+  %if (%sysfunc(fileref(_spinx)) <= 0) %then %do; filename _spinx clear; %end;
 
   %if (&sparql_rc = 0 and not %sysfunc(exist(&resultdsn))) %then %do;
     %let sparql_rc  = 3;

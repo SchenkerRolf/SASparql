@@ -4,13 +4,21 @@
  Ausfuehren:
    1. %let repo_root = <Pfad zum ausgecheckten Repo>;
    2. Dieses Programm submitten.
- Hinweis : Geruest — die eigentlichen Assertions sind als TODO markiert.
+ Stand   : T0-T4 server-verifiziert gegen SAS 9.4M4 (2026-09-15), alle
+           [PASS]. Siehe VERIFY-Hinweise in sparql_parse_response.sas fuer
+           verbleibende Annahmen (Dokumentordnung/Escaping gegen echten
+           Endpunkt statt Fixtures).
 \*------------------------------------------------------------------------*/
 
 /* --- Konfiguration -------------------------------------------------- */
-%let repo_root = %sysfunc(pathname(work));   /* TODO: auf Repo-Root setzen */
+%let repo_root = \\szh.loc\ssz\git\sszscr\SASparql;
 %let macros    = &repo_root./macros;
 %let fixtures  = &repo_root./tests/fixtures;
+
+options source source2 notes msglevel=i 
+    mprint mprintnest 
+	mlogic mlogicnest
+	symbolgen;
 
 /* --- Makros laden (Quelle, nicht Bundle) ---------------------------- */
 %include "&macros./sparql_build_request.sas";
@@ -76,10 +84,24 @@ filename fjson "&fixtures./response_select.json" encoding="utf-8";
 proc compare base=work.sel_xml compare=work.sel_json noprint;
 run;
 %let _cmp = &sysinfo;   /* PROC COMPARE: sysinfo=0 => vollstaendig identisch */
-%if (&_cmp = 0) %then
+%if (&_cmp = 0) %then %do;
   %put NOTE: [PASS] T1 SELECT XML==JSON identisch;
-%else
+%end;
+%else %do;
   %put ERROR: [FAIL] T1 SELECT XML!=JSON (sysinfo=&_cmp);
+%end;
+
+/* Absicherung gegen falsches PASS, wenn beide Datasets leer sind:
+   Fixture hat 5 gebundene Werte (alice: person/name/age, bob: person/name). */
+%let _dsid = %sysfunc(open(work.sel_xml));
+%let _nobs = %sysfunc(attrn(&_dsid, nobs));
+%let _dsid = %sysfunc(close(&_dsid));
+%if (&_nobs = 5) %then %do;
+  %put NOTE: [PASS] T1 sel_xml hat 5 Beobachtungen;
+%end;
+%else %do;
+  %put ERROR: [FAIL] T1 sel_xml hat &_nobs Beobachtungen (erwartet 5);
+%end;
 
 filename fxml  clear;
 filename fjson clear;
@@ -98,19 +120,24 @@ filename fajson "&fixtures./response_ask.json" encoding="utf-8";
 proc compare base=work.ask_xml compare=work.ask_json noprint;
 run;
 %let _cmp = &sysinfo;
-%if (&_cmp = 0) %then
+%if (&_cmp = 0) %then %do;
   %put NOTE: [PASS] T2 ASK XML==JSON identisch;
-%else
+%end;
+%else %do;
   %put ERROR: [FAIL] T2 ASK XML!=JSON (sysinfo=&_cmp);
+%end;
 
+%let _askval = (leer);   /* Sentinel, falls ask_xml 0 Obs hat (SET laeuft dann nie) */
 data _null_;
   set work.ask_xml;
   call symputx('_askval', boolean, 'G');
 run;
-%if (&_askval = true) %then
+%if (&_askval = true) %then %do;
   %put NOTE: [PASS] T2 ASK boolean=true;
-%else
+%end;
+%else %do;
   %put ERROR: [FAIL] T2 ASK boolean=&_askval;
+%end;
 
 filename faxml  clear;
 filename fajson clear;
@@ -123,10 +150,12 @@ filename fajson clear;
              endpoint=http://example.org/sparql,
              queryform=ASK, debug_nohttp=Y, problemhandling=RETURN);
 %_assert_rc(T3 debug_nohttp Kette, 0);
-%if (&sparql_http_status = 200) %then
+%if (&sparql_http_status = 200) %then %do;
   %put NOTE: [PASS] T3 http_status=200;
-%else
+%end;
+%else %do;
   %put ERROR: [FAIL] T3 http_status=&sparql_http_status;
+%end;
 
 /* ==================================================================== *
  * T4  Parallelitaet: zwei Aufrufe -> unterschiedliche Tempnamen (Spec 2.2)
@@ -137,9 +166,11 @@ filename fajson clear;
 %sparqlquery(query=%nrstr(ASK {}), endpoint=http://x, queryform=ASK,
              debug_nohttp=Y, problemhandling=RETURN);
 %let _s2 = &sparql_last_stem;
-%if (%superq(_s1) ne %superq(_s2)) %then
+%if (%superq(_s1) ne %superq(_s2)) %then %do;
   %put NOTE: [PASS] T4 eindeutige Tempnamen;
-%else
+%end;
+%else %do;
   %put ERROR: [FAIL] T4 Tempnamen kollidieren (&_s1);
+%end;
 
 %put NOTE: test_sparqlquery durchlaufen (siehe [PASS]/[FAIL] oben).;
