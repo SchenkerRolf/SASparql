@@ -3,8 +3,8 @@
  Zweck    : Fuehrt genau einen PROC HTTP-Aufruf gegen einen SPARQL-Endpunkt
             aus (POST oder GET), inkl. optionalem Proxy. Einziger Ort im
             Paket mit einem PROC HTTP-Aufruf.
- Autor    : <TODO>
- Version  : 0.4.0
+ Autor    : Rolf Schenker
+ Version  : 0.5.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.2
@@ -41,7 +41,7 @@
    out_fileref=       (req)  Fileref fuer Response-Body.
    headerout_fileref= (leer) Fileref fuer Response-Header (sonst intern).
    timeout=           60     Sekunden.
-   useragent=         SASparql-SAS-Macro/0.4.0  User-Agent-Header. Manche
+   useragent=         SASparql-SAS-Macro/0.5.0  User-Agent-Header. Manche
                        oeffentlichen Endpunkte (z. B. Wikidata) verlangen
                        einen aussagekraeftigen Wert - bei Bedarf mit
                        Kontaktinfo ueberschreiben.
@@ -69,7 +69,7 @@
                       resultformat=, webuser=, webpassword=,
                       proxyhost=, proxyport=, proxyuser=, proxypassword=,
                       out_fileref=, headerout_fileref=, timeout=60,
-                      useragent=SASparql-SAS-Macro/0.4.0,
+                      useragent=SASparql-SAS-Macro/0.5.0,
                       debug_nohttp=N, debug=N);
 
   %global sparql_rc sparql_msg sparql_http_status;

@@ -3,8 +3,8 @@
  Zweck    : Interpretiert die Response abhaengig von queryform/resultformat.
             SELECT/ASK -> SAS-Dataset (langes/tidy Schema);
             CONSTRUCT/DESCRIBE -> RDF-Datei durchreichen.
- Autor    : <TODO>
- Version  : 0.3.0
+ Autor    : Rolf Schenker
+ Version  : 0.5.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.3
@@ -43,9 +43,12 @@
    - XML: Automap scheitert an der SPARQL-Results-XML-Struktur; es wird eine
      explizite XML-Map verwendet (nach Entfernen des Default-Namespace).
      ridx kommt NICHT aus der Map (INDEX-Element dort ungueltig), sondern
-     aus einer Gruppenwechsel-Erkennung im DATA-Step. Noch offen: ob diese
-     Annahmen auch gegen einen echten Fuseki-Server (nicht nur Fixtures)
-     halten, insbesondere Dokumentordnung und Zeichen-Escaping.
+     aus einer Gruppenwechsel-Erkennung im DATA-Step. Live gegen Wikidata
+     verifiziert (2026-09-16, tests/test_live_wikidata.sas) - dort aber nur
+     mit Ein-Variablen-Ergebnissen (?label). Noch offen: dieselbe Gruppen-
+     wechsel-Logik gegen einen echten Server mit MEHREREN Variablen pro
+     Ergebnis (Dokumentordnung/mehrere Bindings je <result>) - gegen
+     Fixtures bereits abgedeckt (response_select.xml), live noch nicht.
 
  Rueckgabe:
    &sparql_rc (0=ok, 1=Parameterfehler, 3=Parse-Fehler), &sparql_msg
@@ -301,7 +304,7 @@
       quit;
     %end;
     %else %do;
-      libname _jin json fileref=_spin;       /* VERIFY JSON-Struktur */
+      libname _jin json fileref=_spin;
       %if (&debug = Y) %then %do; %_sq_dbgdump(_jin) %end;
       %let lib = _JIN;
 

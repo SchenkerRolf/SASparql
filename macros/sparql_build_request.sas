@@ -3,8 +3,8 @@
  Zweck    : Vereinheitlicht die Query-Quelle (query= ODER queryfile=) und
             legt den vollstaendigen Query-Text (ohne Zeilenlaengen-
             Trunkierung) in out_fileref ab.
- Autor    : <TODO>
- Version  : 0.2.0
+ Autor    : Rolf Schenker
+ Version  : 0.5.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.1

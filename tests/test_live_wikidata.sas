@@ -62,7 +62,7 @@
 %let proxypassword = ;
 
 /* Kontaktinfo ergaenzen, falls verfuegbar (WDQS-Empfehlung, nicht Pflicht). */
-%let ua = SASparql-SAS-Macro/0.4.0 (verification test run);
+%let ua = SASparql-SAS-Macro/0.5.0 (verification test run);
 
 /* Bewusst OHNE mlogic/symbolgen (anders als tests/test_sparqlquery.sas):
    beides wuerde Parameterwerte bzw. aufgeloeste Makrovariablen ins Log
@@ -184,7 +184,7 @@ proc compare base=work.wd_l1 compare=work.wd_l2 noprint; run;
 %put NOTE: L1/L2 Detail - sysinfo=&sysinfo;
 
 /* ==================================================================== *
- * L3  SELECT, GET, XML - prueft urlencode()-Pfad (Spec 3.2, VERIFY)
+ * L3  SELECT, GET, XML - prueft urlencode()-Pfad (Spec 3.2)
  * ==================================================================== */
 %sparqlquery(
     endpoint=&endpoint,
