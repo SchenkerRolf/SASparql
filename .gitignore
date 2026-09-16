@@ -1,0 +1,6 @@
+# Build-Artefakt — wird nur als Release-Asset verteilt (Spec 8.1/8.3)
+sparqlquery_bundle.sas
+dist/
+
+# Lokale SAS-Testlaeufe (Log-Exports aus Enterprise Guide)
+tests/log_*.log

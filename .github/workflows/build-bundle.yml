@@ -1,0 +1,28 @@
+name: build-bundle
+
+# Nur bei Release-Tags v*.*.* — kein Build bei gewoehnlichen Commits/PRs
+# (Spec 8.2). Tests aus tests/ laufen unabhaengig davon.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # noetig, um das Release-Asset anzuhaengen
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build bundle
+        run: |
+          chmod +x scripts/build_bundle.sh
+          scripts/build_bundle.sh "${{ github.ref_name }}" "${{ github.sha }}"
+
+      - name: Release erstellen/ergaenzen + Asset anhaengen
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sparqlquery_bundle.sas

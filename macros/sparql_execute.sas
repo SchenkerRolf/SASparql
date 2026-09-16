@@ -1,0 +1,310 @@
+/*------------------------------------------------------------------------*\
+ Makro    : sparql_execute
+ Zweck    : Fuehrt genau einen PROC HTTP-Aufruf gegen einen SPARQL-Endpunkt
+            aus (POST oder GET), inkl. optionalem Proxy. Einziger Ort im
+            Paket mit einem PROC HTTP-Aufruf.
+ Autor    : Rolf Schenker
+ Version  : 0.5.0
+ Aenderungen:
+   YYYY-MM-DD  Name   Beschreibung
+   2026-09-14  init   Initiales Geruest gemaess Spec 3.2
+   2026-09-14  impl   Validierung (V3-V7), Accept, PROC HTTP, Status, nomprint
+   2026-09-15  ua     useragent= ergaenzt (manche oeffentlichen Endpunkte,
+                       z. B. Wikidata/WDQS, drosseln/blocken Clients ohne
+                       aussagekraeftigen User-Agent-Header)
+   2026-09-16  post   POST: Query-Text vor PROC HTTP in einen normalen
+                       (nicht recfm=n) Fileref kopiert - PROC HTTP in= mit
+                       recfm=n-Fileref hat sich server-verifiziert gegen
+                       einen echten Endpunkt (Wikidata) als unzuverlaessig
+                       erwiesen (Query wurde kurz vor Ende abgeschnitten,
+                       obwohl die Quelldatei nachweislich vollstaendig war)
+   2026-09-16  dbgno  debug_nohttp=Y baut GET-URL/POST-Fileref jetzt VOR dem
+                       Skip auf (Spec 3.4: "Query wird normal gebaut") statt
+                       vorher zu %returnen - damit deckt ein fixture-basierter
+                       Testlauf ohne Netzwerk auch Fehler in dieser Vor-
+                       bereitungslogik ab (s. GET-$65534-Bug oben, der wegen
+                       des fruehen Skips nie fixture-getestet wurde)
+
+ Parameter (siehe Spec 3.2):
+   endpoint=          (req)  SPARQL-Endpunkt-URL (http:// oder https://).
+   in_fileref=        (req)  Fileref mit Query-Text.
+   method=            POST   POST oder GET.
+   queryform=         SELECT SELECT/ASK/CONSTRUCT/DESCRIBE.
+   resultformat=      (leer) SELECT/ASK: XML|JSON (Def. XML);
+                             CONSTRUCT/DESCRIBE: TURTLE|JSONLD (Def. TURTLE).
+   webuser=           (leer) Endpunkt-Auth  -> WEBUSERNAME=.
+   webpassword=       (leer) Endpunkt-Auth  -> WEBPASSWORD= (PWENCODE empf.).
+   proxyhost=         (leer) Proxy-Server   -> PROXYHOST=.
+   proxyport=         (leer) Proxy-Port     -> PROXYPORT=.
+   proxyuser=         (leer) Proxy-Auth     -> PROXYUSERNAME= (ab 9.4M4).
+   proxypassword=     (leer) Proxy-Auth     -> PROXYPASSWORD= (ab 9.4M4).
+   out_fileref=       (req)  Fileref fuer Response-Body.
+   headerout_fileref= (leer) Fileref fuer Response-Header (sonst intern).
+   timeout=           60     Sekunden.
+   useragent=         SASparql-SAS-Macro/0.5.0  User-Agent-Header. Manche
+                       oeffentlichen Endpunkte (z. B. Wikidata) verlangen
+                       einen aussagekraeftigen Wert - bei Bedarf mit
+                       Kontaktinfo ueberschreiben.
+   debug_nohttp=      N      Y = PROC HTTP ueberspringen (Test, Spec 3.4).
+   debug=             N      zusaetzliche Log-Ausgabe.
+
+ Accept-Header (Spec 3.2):
+   SELECT/ASK + XML   -> application/sparql-results+xml
+   SELECT/ASK + JSON  -> application/sparql-results+json
+   CONSTRUCT/DESCRIBE + TURTLE -> text/turtle
+   CONSTRUCT/DESCRIBE + JSONLD -> application/ld+json
+
+ Server-verifiziert (2026-09-16, tests/test_live_wikidata.sas gegen den
+   echten Wikidata-Endpunkt): urlencode()-Funktion fuer GET; PROXYUSERNAME=/
+   PROXYPASSWORD= in PROC HTTP; useragent=-Header. Keine offenen VERIFY-
+   Punkte mehr in diesem Makro.
+
+ Rueckgabe:
+   &sparql_rc (0=ok,1=Param,2=HTTP), &sparql_msg, &sparql_http_status
+
+ Abhaengigkeiten:
+   keine (Base SAS 9.4M4: PROC HTTP)
+\*------------------------------------------------------------------------*/
+%macro sparql_execute(endpoint=, in_fileref=, method=POST, queryform=SELECT,
+                      resultformat=, webuser=, webpassword=,
+                      proxyhost=, proxyport=, proxyuser=, proxypassword=,
+                      out_fileref=, headerout_fileref=, timeout=60,
+                      useragent=SASparql-SAS-Macro/0.5.0,
+                      debug_nohttp=N, debug=N);
+
+  %global sparql_rc sparql_msg sparql_http_status;
+  %let sparql_rc          = 0;
+  %let sparql_msg         = ;
+  %let sparql_http_status = ;
+
+  %local macnm accept sopt geturl inpath ownhdr n pfx8 raw;
+  %let macnm = sparql_execute;
+
+  %let method       = %upcase(&method);
+  %let queryform    = %upcase(&queryform);
+  %let resultformat = %upcase(&resultformat);
+  %let debug        = %upcase(&debug);
+  %let debug_nohttp = %upcase(&debug_nohttp);
+
+  /* ================= Validierung (Spec 5) =========================== */
+
+  /* V3: method */
+  %if not (&method = POST or &method = GET) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: method=&method ungueltig - POST/GET (V3).;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+
+  /* Pflichtparameter */
+  %if (%length(%superq(endpoint)) = 0) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: endpoint= ist Pflicht (V4).;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+  %if (%length(%superq(in_fileref)) = 0) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: in_fileref= ist Pflicht.;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+  %if (%length(%superq(out_fileref)) = 0) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: out_fileref= ist Pflicht.;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+
+  /* V4: Schema */
+  %let n    = %length(%superq(endpoint));
+  %let pfx8 = %sysfunc(lowcase(%qsubstr(%superq(endpoint), 1, %sysfunc(min(8, &n)))));
+  %if (%index(&pfx8, http://) ne 1) and (%index(&pfx8, https://) ne 1) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: endpoint muss mit http:// oder https:// beginnen (V4).;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+
+  /* V5: queryform */
+  %if not (&queryform = SELECT or &queryform = ASK
+        or &queryform = CONSTRUCT or &queryform = DESCRIBE) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: queryform=&queryform ungueltig (V5).;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+
+  /* resultformat-Default je queryform */
+  %if (%length(&resultformat) = 0) %then %do;
+    %if (&queryform = SELECT or &queryform = ASK) %then %let resultformat = XML;
+    %else %let resultformat = TURTLE;
+  %end;
+
+  /* V6: resultformat passt zu queryform */
+  %if (&queryform = SELECT or &queryform = ASK) %then %do;
+    %if not (&resultformat = XML or &resultformat = JSON) %then %do;
+      %let sparql_rc = 1; %let sparql_msg = &macnm.: resultformat=&resultformat unzulaessig fuer &queryform - XML/JSON (V6).;
+      %put ERROR: &sparql_msg; %return;
+    %end;
+  %end;
+  %else %do;
+    %if not (&resultformat = TURTLE or &resultformat = JSONLD) %then %do;
+      %let sparql_rc = 1; %let sparql_msg = &macnm.: resultformat=&resultformat unzulaessig fuer &queryform - TURTLE/JSONLD (V6).;
+      %put ERROR: &sparql_msg; %return;
+    %end;
+  %end;
+
+  /* V7: proxy-Credentials nur mit proxyhost */
+  %if ((%length(%superq(proxyuser)) or %length(%superq(proxypassword)))
+       and %length(%superq(proxyhost)) = 0) %then %do;
+    %let sparql_rc = 1; %let sparql_msg = &macnm.: proxyuser/proxypassword ohne proxyhost (V7).;
+    %put ERROR: &sparql_msg; %return;
+  %end;
+
+  /* ================= Accept-Header ================================== */
+  %if (&queryform = SELECT or &queryform = ASK) %then %do;
+    %if (&resultformat = XML) %then %let accept = application/sparql-results+xml;
+    %else %let accept = application/sparql-results+json;
+  %end;
+  %else %do;
+    %if (&resultformat = TURTLE) %then %let accept = text/turtle;
+    %else %let accept = application/ld+json;
+  %end;
+
+  /* ================= headerout-Default (intern) ==================== */
+  %let ownhdr = 0;
+  %if (%length(%superq(headerout_fileref)) = 0) %then %do;
+    %let headerout_fileref = _sqhdr;
+    filename _sqhdr temp;
+    %let ownhdr = 1;
+  %end;
+
+  /* ================= GET: URL mit urlencode() bauen ================= */
+  /* Wird AUCH bei debug_nohttp=Y ausgefuehrt (Spec 3.4: "Query wird normal
+     gebaut") - nur der eigentliche PROC HTTP-Aufruf unten wird uebersprungen.
+     Damit deckt ein reiner debug_nohttp=Y-Testlauf (ohne Netzwerk) auch
+     Compile-/Laufzeitfehler in dieser Vorbereitungslogik ab - genau hier
+     stand bis 2026-09-16 ein Bug (_u $65534 > SAS-Maximum $32767), der
+     wegen des fruehen %return unter debug_nohttp=Y nie getestet wurde. */
+  %if (&method = GET) %then %do;
+    %let inpath = %sysfunc(pathname(&in_fileref));
+    %let geturl = ;
+    data _null_;
+      length _q $32767 _u $32767;
+      infile "&inpath" recfm=n lrecl=32767 length=_len;
+      input _q $varying32767. _len;
+      _u = cats("%superq(endpoint)",
+                ifc(index("%superq(endpoint)", '?') > 0, '&', '?'),
+                'query=', urlencode(strip(_q)));
+      call symputx('geturl', _u, 'L');
+    run;
+    %if (&syserr > 4) %then %do;
+      %let sparql_rc  = 1;
+      %let sparql_msg = &macnm.: Aufbau der GET-URL fehlgeschlagen (syserr=&syserr).;
+      %put ERROR: &sparql_msg;
+      %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+      %return;
+    %end;
+  %end;
+
+  /* ================= POST: Query in normalen Fileref kopieren ======= */
+  /* Ebenfalls unter debug_nohttp=Y ausgefuehrt (s. Kommentar oben). PROC
+     HTTP in= mit einem recfm=n-Fileref hat sich server-verifiziert als
+     unzuverlaessig erwiesen: die letzten paar Byte des Query-Texts gingen
+     beim Versand verloren, obwohl die Quelldatei nachweislich vollstaendig
+     war (2026-09-16, Wikidata: "Encountered <EOF>" kurz vor der
+     schliessenden Klammer). Deshalb den Query-Text vor PROC HTTP in einen
+     normalen (nicht recfm=n) Fileref kopieren. */
+  %if (&method = POST) %then %do;
+    filename _sqpost temp;
+    data _null_;
+      length _buf $32767;
+      infile "%sysfunc(pathname(&in_fileref))" recfm=n lrecl=32767 length=_len;
+      input _buf $varying32767. _len;
+      file _sqpost lrecl=32767;
+      put _buf $varying32767. _len;
+    run;
+    %if (&syserr > 4) %then %do;
+      %let sparql_rc  = 1;
+      %let sparql_msg = &macnm.: Kopie des Query-Texts fuer POST fehlgeschlagen (syserr=&syserr).;
+      %put ERROR: &sparql_msg;
+      %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+      %return;
+    %end;
+  %end;
+
+  /* ================= debug_nohttp: kein PROC HTTP (Spec 3.4) ========= */
+  %if (&debug_nohttp = Y) %then %do;
+    %let sparql_http_status = 200;
+    %put NOTE: &macnm.: debug_nohttp=Y - PROC HTTP uebersprungen, Status=200.;
+    %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+    %if (&method = POST and &debug ne Y) %then %do; filename _sqpost clear; %end;
+    %return;
+  %end;
+
+  /* ================= Credentials nicht ins Log (Spec 7) ============= */
+  %let sopt = %sysfunc(getoption(mprint)) %sysfunc(getoption(mlogic)) %sysfunc(getoption(symbolgen));
+  options nomprint nomlogic nosymbolgen;
+
+  %if (&method = POST) %then %do;
+    proc http
+        url="%superq(endpoint)"
+        method="post"
+        in=_sqpost
+        ct="application/sparql-query"
+        out=&out_fileref
+        headerout=&headerout_fileref
+        timeout=&timeout
+        %if (%length(%superq(webuser))) %then %do;
+          webusername="%superq(webuser)" webpassword="%superq(webpassword)"
+        %end;
+        %if (%length(%superq(proxyhost))) %then %do;
+          proxyhost="%superq(proxyhost)"
+          %if (%length(%superq(proxyport))) %then %do; proxyport=%superq(proxyport) %end;
+          %if (%length(%superq(proxyuser)) or %length(%superq(proxypassword))) %then %do;
+            proxyusername="%superq(proxyuser)" proxypassword="%superq(proxypassword)"
+          %end;
+        %end;
+        ;
+        headers "Accept" = "&accept"
+                "User-Agent" = "%superq(useragent)";
+    run;
+  %end;
+  %else %do;
+    proc http
+        url="%superq(geturl)"
+        method="get"
+        out=&out_fileref
+        headerout=&headerout_fileref
+        timeout=&timeout
+        %if (%length(%superq(webuser))) %then %do;
+          webusername="%superq(webuser)" webpassword="%superq(webpassword)"
+        %end;
+        %if (%length(%superq(proxyhost))) %then %do;
+          proxyhost="%superq(proxyhost)"
+          %if (%length(%superq(proxyport))) %then %do; proxyport=%superq(proxyport) %end;
+          %if (%length(%superq(proxyuser)) or %length(%superq(proxypassword))) %then %do;
+            proxyusername="%superq(proxyuser)" proxypassword="%superq(proxypassword)"
+          %end;
+        %end;
+        ;
+        headers "Accept" = "&accept"
+                "User-Agent" = "%superq(useragent)";
+    run;
+  %end;
+
+  /* Optionen wiederherstellen (Spec 7) */
+  options &sopt;
+
+  /* ================= Status uebernehmen (Spec 3.2 / V8) ============= */
+  %let raw = ;
+  %if %symexist(SYS_PROCHTTP_STATUS_CODE) %then %let raw = &SYS_PROCHTTP_STATUS_CODE;
+  %let raw = %sysfunc(strip(&raw));
+  %if (%length(&raw) = 0) %then %let sparql_http_status = 000;
+  %else %if (%sysfunc(verify(&raw, 0123456789)) ne 0) %then %let sparql_http_status = 000;
+  %else %let sparql_http_status = &raw;
+
+  /* interne headerout aufraeumen */
+  %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+  %if (&method = POST and &debug ne Y) %then %do; filename _sqpost clear; %end;
+
+  /* rc aus Status (2xx = ok) */
+  %if not (&sparql_http_status >= 200 and &sparql_http_status <= 299) %then %do;
+    %let sparql_rc  = 2;
+    %let sparql_msg = &macnm.: HTTP-Status &sparql_http_status (kein 2xx).;
+    %put ERROR: &sparql_msg;
+  %end;
+  %else %if (&debug = Y) %then %do;
+    %put NOTE: &macnm.: HTTP &sparql_http_status (&method &queryform/&resultformat).;
+  %end;
+
+%mend sparql_execute;
