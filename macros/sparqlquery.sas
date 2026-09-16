@@ -42,7 +42,7 @@
                    method=POST, queryform=SELECT, resultformat=,
                    webuser=, webpassword=,
                    proxyhost=, proxyport=, proxyuser=, proxypassword=,
-                   timeout=60, useragent=SASparql-SAS-Macro/0.3.0,
+                   timeout=60, useragent=SASparql-SAS-Macro/0.4.0,
                    resultdsn=queryresult, resultfile=,
                    problemhandling=ABORTCANCEL,
                    debug=N, debug_nohttp=N, showresponse=Y,

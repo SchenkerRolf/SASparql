@@ -4,10 +4,9 @@
  Ausfuehren:
    1. %let repo_root = <Pfad zum ausgecheckten Repo>;
    2. Dieses Programm submitten.
- Stand   : T0-T4 server-verifiziert gegen SAS 9.4M4 (2026-09-15), alle
-           [PASS]. Siehe VERIFY-Hinweise in sparql_parse_response.sas fuer
-           verbleibende Annahmen (Dokumentordnung/Escaping gegen echten
-           Endpunkt statt Fixtures).
+ Stand   : T0-T4 (inkl. T3b GET) server-verifiziert gegen SAS 9.4M4
+           (2026-09-16), alle [PASS]. Zusaetzlich live gegen einen echten
+           SPARQL-Endpunkt verifiziert: tests/test_live_wikidata.sas.
 \*------------------------------------------------------------------------*/
 
 /* --- Konfiguration -------------------------------------------------- */
@@ -155,6 +154,23 @@ filename fajson clear;
 %end;
 %else %do;
   %put ERROR: [FAIL] T3 http_status=&sparql_http_status;
+%end;
+
+/* T3b: dieselbe Kette mit method=GET - baut die urlencode()-URL auch unter
+   debug_nohttp=Y auf (Spec 3.4: "Query wird normal gebaut", seit 2026-09-16
+   nicht mehr uebersprungen). Deckt Compile-/Laufzeitfehler in dieser Logik
+   ohne Netzwerkzugriff ab (s. GET-$65534-Laengenbug, server-verifiziert
+   2026-09-16 gegen einen echten Endpunkt gefunden, weil dieser Codepfad
+   zuvor nie - auch nicht mit debug_nohttp=Y - durchlaufen wurde). */
+%sparqlquery(query=%nrstr(SELECT ?s WHERE { ?s ?p "a value with spaces" }),
+             endpoint=http://example.org/sparql, method=GET,
+             queryform=SELECT, debug_nohttp=Y, problemhandling=RETURN);
+%_assert_rc(T3b debug_nohttp Kette GET, 0);
+%if (&sparql_http_status = 200) %then %do;
+  %put NOTE: [PASS] T3b GET http_status=200;
+%end;
+%else %do;
+  %put ERROR: [FAIL] T3b GET http_status=&sparql_http_status;
 %end;
 
 /* ==================================================================== *

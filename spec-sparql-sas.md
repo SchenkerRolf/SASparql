@@ -385,14 +385,22 @@ den Query-Text in einem Stück encodiert).
 - `%sparql_execute` und `%sparqlquery` werden mit `debug_nohttp=Y` getestet,
   um die Aufrufkette (Parametervalidierung, Statushandling,
   Tempfile-Erzeugung) ohne echten Netzwerkzugriff zu prüfen.
+  `debug_nohttp=Y` baut dabei die GET-URL (`urlencode()`) bzw. den
+  POST-Fileref ganz normal auf und überspringt nur den eigentlichen
+  `PROC HTTP`-Aufruf (Spec 3.4/3.2) — ein `method=GET`-Testfall (T3b) deckt
+  damit auch Compile-/Laufzeitfehler in der GET-URL-Vorbereitung ohne
+  Netzwerkzugriff ab.
 - Ein Test für Parallelität: zwei simulierte gleichzeitige Aufrufe (z. B.
   zwei Makroaufrufe kurz nacheinander in derselben Session) müssen
   unterschiedliche, nicht kollidierende Tempfile-Namen erzeugen (Abschnitt
-  2.2) — als expliziter Testfall, sobald ein echter Endpunkt verfügbar ist,
-  zusätzlich mit tatsächlich parallelen Server-Sessions verifizieren.
-- Sobald ein Testendpunkt verfügbar ist (aktuell nicht der Fall): Tests
-  gegen echten Fuseki-Server ergänzen, insbesondere für den
-  HTTP-Statuscode-Pfad (V8) mit einem bewusst fehlerhaften Request.
+  2.2) — als expliziter Testfall zusätzlich mit tatsächlich parallelen
+  Server-Sessions verifizieren.
+- **Live-Endpunkt-Tests** (`tests/test_live_wikidata.sas`, seit 2026-09-16):
+  gegen den echten, öffentlichen Wikidata-SPARQL-Endpunkt, ergänzend zu den
+  endpunktunabhängigen Fixture-Tests oben. Deckt ab, was mit Fixtures
+  strukturell nicht prüfbar ist: den tatsächlichen `PROC HTTP`-Datentransfer
+  (POST-Body, GET-URL) gegen einen echten Server, inkl. HTTP-Statuscode-Pfad
+  (V8). Ersetzt den ursprünglich als Fuseki-Test geplanten Punkt.
 
 ---
 

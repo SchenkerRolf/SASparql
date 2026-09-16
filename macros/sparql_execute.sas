@@ -18,6 +18,12 @@
                        einen echten Endpunkt (Wikidata) als unzuverlaessig
                        erwiesen (Query wurde kurz vor Ende abgeschnitten,
                        obwohl die Quelldatei nachweislich vollstaendig war)
+   2026-09-16  dbgno  debug_nohttp=Y baut GET-URL/POST-Fileref jetzt VOR dem
+                       Skip auf (Spec 3.4: "Query wird normal gebaut") statt
+                       vorher zu %returnen - damit deckt ein fixture-basierter
+                       Testlauf ohne Netzwerk auch Fehler in dieser Vor-
+                       bereitungslogik ab (s. GET-$65534-Bug oben, der wegen
+                       des fruehen Skips nie fixture-getestet wurde)
 
  Parameter (siehe Spec 3.2):
    endpoint=          (req)  SPARQL-Endpunkt-URL (http:// oder https://).
@@ -63,7 +69,7 @@
                       resultformat=, webuser=, webpassword=,
                       proxyhost=, proxyport=, proxyuser=, proxypassword=,
                       out_fileref=, headerout_fileref=, timeout=60,
-                      useragent=SASparql-SAS-Macro/0.3.0,
+                      useragent=SASparql-SAS-Macro/0.4.0,
                       debug_nohttp=N, debug=N);
 
   %global sparql_rc sparql_msg sparql_http_status;
@@ -154,13 +160,6 @@
     %else %let accept = application/ld+json;
   %end;
 
-  /* ================= debug_nohttp: kein PROC HTTP (Spec 3.4) ========= */
-  %if (&debug_nohttp = Y) %then %do;
-    %let sparql_http_status = 200;
-    %put NOTE: &macnm.: debug_nohttp=Y - PROC HTTP uebersprungen, Status=200.;
-    %return;
-  %end;
-
   /* ================= headerout-Default (intern) ==================== */
   %let ownhdr = 0;
   %if (%length(%superq(headerout_fileref)) = 0) %then %do;
@@ -170,32 +169,42 @@
   %end;
 
   /* ================= GET: URL mit urlencode() bauen ================= */
+  /* Wird AUCH bei debug_nohttp=Y ausgefuehrt (Spec 3.4: "Query wird normal
+     gebaut") - nur der eigentliche PROC HTTP-Aufruf unten wird uebersprungen.
+     Damit deckt ein reiner debug_nohttp=Y-Testlauf (ohne Netzwerk) auch
+     Compile-/Laufzeitfehler in dieser Vorbereitungslogik ab - genau hier
+     stand bis 2026-09-16 ein Bug (_u $65534 > SAS-Maximum $32767), der
+     wegen des fruehen %return unter debug_nohttp=Y nie getestet wurde. */
   %if (&method = GET) %then %do;
     %let inpath = %sysfunc(pathname(&in_fileref));
     %let geturl = ;
-    /* Query-Text roh lesen (recfm=n) und in EINEM urlencode() kodieren.
-       _u ist wie _q auf $32767 begrenzt (server-verifiziertes SAS-Maximum
-       fuer Zeichenvariablen, ERROR 353-185 bei 65534 - 2026-09-15) - fuer
-       laengere Queries GET ohnehin ungeeignet (s. Grenzen, README/Spec 6.2). */
     data _null_;
       length _q $32767 _u $32767;
       infile "&inpath" recfm=n lrecl=32767 length=_len;
       input _q $varying32767. _len;
       _u = cats("%superq(endpoint)",
                 ifc(index("%superq(endpoint)", '?') > 0, '&', '?'),
-                'query=', urlencode(strip(_q)));   /* VERIFY urlencode() */
+                'query=', urlencode(strip(_q)));
       call symputx('geturl', _u, 'L');
     run;
+    %if (&syserr > 4) %then %do;
+      %let sparql_rc  = 1;
+      %let sparql_msg = &macnm.: Aufbau der GET-URL fehlgeschlagen (syserr=&syserr).;
+      %put ERROR: &sparql_msg;
+      %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+      %return;
+    %end;
   %end;
 
   /* ================= POST: Query in normalen Fileref kopieren ======= */
+  /* Ebenfalls unter debug_nohttp=Y ausgefuehrt (s. Kommentar oben). PROC
+     HTTP in= mit einem recfm=n-Fileref hat sich server-verifiziert als
+     unzuverlaessig erwiesen: die letzten paar Byte des Query-Texts gingen
+     beim Versand verloren, obwohl die Quelldatei nachweislich vollstaendig
+     war (2026-09-16, Wikidata: "Encountered <EOF>" kurz vor der
+     schliessenden Klammer). Deshalb den Query-Text vor PROC HTTP in einen
+     normalen (nicht recfm=n) Fileref kopieren. */
   %if (&method = POST) %then %do;
-    /* PROC HTTP in= mit einem recfm=n-Fileref hat sich server-verifiziert
-       als unzuverlaessig erwiesen: die letzten paar Byte des Query-Texts
-       gingen beim Versand verloren, obwohl die Quelldatei nachweislich
-       vollstaendig war (2026-09-16, Wikidata: "Encountered <EOF>" kurz vor
-       der schliessenden Klammer). Deshalb den Query-Text vor PROC HTTP in
-       einen normalen (nicht recfm=n) Fileref kopieren. */
     filename _sqpost temp;
     data _null_;
       length _buf $32767;
@@ -204,6 +213,22 @@
       file _sqpost lrecl=32767;
       put _buf $varying32767. _len;
     run;
+    %if (&syserr > 4) %then %do;
+      %let sparql_rc  = 1;
+      %let sparql_msg = &macnm.: Kopie des Query-Texts fuer POST fehlgeschlagen (syserr=&syserr).;
+      %put ERROR: &sparql_msg;
+      %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+      %return;
+    %end;
+  %end;
+
+  /* ================= debug_nohttp: kein PROC HTTP (Spec 3.4) ========= */
+  %if (&debug_nohttp = Y) %then %do;
+    %let sparql_http_status = 200;
+    %put NOTE: &macnm.: debug_nohttp=Y - PROC HTTP uebersprungen, Status=200.;
+    %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+    %if (&method = POST and &debug ne Y) %then %do; filename _sqpost clear; %end;
+    %return;
   %end;
 
   /* ================= Credentials nicht ins Log (Spec 7) ============= */
