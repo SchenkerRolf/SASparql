@@ -500,9 +500,25 @@ abgeschlossen — T0–T4 alle [PASS].** Dabei geklärt:
 - `resultdsn` wird bei SELECT nach `ridx`/`var` sortiert, damit XML- und
   JSON-Pfad trotz unterschiedlicher natürlicher Zeilenreihenfolge dasselbe
   Ergebnis für `PROC COMPARE` liefern.
-- Noch offen: Verifikation gegen einen echten SPARQL-Endpunkt (nicht nur
-  Fixtures) für GET/`urlencode()` und Proxy-Optionen (s. VERIFY-Kommentare in
-  `sparql_execute.sas`).
+
+**Live-Server-Verifikation (2026-09-16, gegen den echten Wikidata-SPARQL-
+Endpunkt `https://query.wikidata.org/sparql`, `tests/test_live_wikidata.sas`)
+abgeschlossen — alle sieben Fälle [PASS]:** SELECT über alle vier
+Methode×Format-Kombinationen (POST/GET × XML/JSON, alle vier liefern
+nachweislich identisches `resultdsn`), ASK, CONSTRUCT (Turtle und JSON-LD).
+Dabei geklärt:
+- `PROC HTTP`s `in=`-Option mit einem `recfm=n`-Fileref hat den POST-Query-
+  Text kurz vor Ende abgeschnitten (Query kam beim Server unvollständig an),
+  obwohl die Quelldatei nachweislich vollständig war. Fix: Query-Text vor
+  `PROC HTTP` in einen normalen (nicht `recfm=n`) Fileref kopieren.
+- `_u $65534` in der GET/`urlencode()`-Logik überschritt das SAS-Maximum für
+  Zeichenvariablen (32767) — Compile-Fehler, nie zuvor getestet, da
+  `debug_nohttp=Y` diesen Codepfad übersprang. Auf `$32767` korrigiert.
+- Manche öffentlichen Endpunkte (Wikidata/WDQS) drosseln/blocken Clients
+  ohne aussagekräftigen `User-Agent` — neuer Parameter `useragent=`.
+- `PROXYUSERNAME=`/`PROXYPASSWORD=` funktionieren wie in 2.1 angenommen.
+- Damit ist die GET/`urlencode()`-VERIFY-Markierung in `sparql_execute.sas`
+  aufgelöst.
 
 ---
 

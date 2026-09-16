@@ -4,10 +4,12 @@ SAS-Makropaket, das SPARQL-Abfragen gegen einen HTTP(S)-Endpunkt ausführt und
 das Ergebnis als SAS-Dataset (SELECT/ASK) bzw. als RDF-Datei
 (CONSTRUCT/DESCRIBE) bereitstellt.
 
-> **Status:** In Entwicklung. Alle vier Makros sind implementiert und gegen
-> eine laufende SAS-9.4M4-Instanz mit den fixture-basierten Tests aus
-> [`tests/`](tests/) verifiziert (2026-09-15, T0–T4 alle [PASS]). Noch offen:
-> Verifikation gegen einen echten SPARQL-Endpunkt (GET/Proxy-Optionen).
+> **Status:** Alle vier Makros sind implementiert und sowohl gegen die
+> fixture-basierten Tests ([`tests/test_sparqlquery.sas`](tests/test_sparqlquery.sas),
+> 2026-09-15, T0–T4 alle [PASS]) als auch gegen einen echten, öffentlichen
+> SPARQL-Endpunkt ([`tests/test_live_wikidata.sas`](tests/test_live_wikidata.sas)
+> gegen Wikidata, 2026-09-16) verifiziert — SELECT (POST/GET × XML/JSON), ASK,
+> CONSTRUCT (Turtle/JSON-LD) alle [PASS].
 > Verbindliche Spezifikation: [`spec-sparql-sas.md`](spec-sparql-sas.md).
 
 ---
@@ -260,8 +262,12 @@ Nur für Mitarbeit am Paket selbst (nicht für die Nutzung nötig):
 
 - **Quelle:** [`macros/`](macros/) — die vier Makros werden hier
   entwickelt/reviewt.
-- **Tests:** [`tests/`](tests/) — fixture-basiert, ohne Live-Endpunkt
-  (`tests/fixtures/`, `tests/test_sparqlquery.sas`).
+- **Tests:** [`tests/`](tests/) — zwei Ebenen:
+  - fixture-basiert, ohne Live-Endpunkt (`tests/fixtures/`,
+    `tests/test_sparqlquery.sas`).
+  - `tests/test_live_wikidata.sas` gegen den echten, öffentlichen
+    Wikidata-SPARQL-Endpunkt (braucht Internetzugang vom SAS-Server aus,
+    ggf. Proxy-Konfiguration in der Datei anpassen).
 - **Bundle bauen (lokal):**
   ```bash
   scripts/build_bundle.sh v0.0.0-dev "$(git rev-parse --short HEAD)"
@@ -280,4 +286,11 @@ Nur für Mitarbeit am Paket selbst (nicht für die Nutzung nötig):
   sparqlquery) inkl. Test-Harness T0–T4. Server-verifiziert gegen SAS 9.4M4
   (2026-09-15): XML-Parsing auf explizite XML-Map umgestellt (Automap
   scheitert an der SPARQL-Results-Struktur), JSON-Parsing an die tatsächliche
-  Automap-Struktur angepasst (ein Member je SPARQL-Variable).
+  Automap-Struktur angepasst (ein Member je SPARQL-Variable). Live-verifiziert
+  gegen den echten Wikidata-SPARQL-Endpunkt (2026-09-16, `test_live_wikidata.sas`):
+  POST-Query-Text wurde von `PROC HTTP in=` mit einem `recfm=n`-Fileref
+  unzuverlässig übertragen (kurz vor Ende abgeschnitten) — behoben durch
+  Kopie in einen normalen Fileref vor dem Aufruf; `useragent=`-Parameter
+  ergänzt (manche öffentliche Endpunkte wie Wikidata verlangen das); Längen-
+  Bug in der GET/`urlencode()`-Logik behoben (`$65534` überschritt das
+  SAS-Maximum `$32767`).

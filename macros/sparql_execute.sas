@@ -4,11 +4,20 @@
             aus (POST oder GET), inkl. optionalem Proxy. Einziger Ort im
             Paket mit einem PROC HTTP-Aufruf.
  Autor    : <TODO>
- Version  : 0.2.0
+ Version  : 0.4.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.2
    2026-09-14  impl   Validierung (V3-V7), Accept, PROC HTTP, Status, nomprint
+   2026-09-15  ua     useragent= ergaenzt (manche oeffentlichen Endpunkte,
+                       z. B. Wikidata/WDQS, drosseln/blocken Clients ohne
+                       aussagekraeftigen User-Agent-Header)
+   2026-09-16  post   POST: Query-Text vor PROC HTTP in einen normalen
+                       (nicht recfm=n) Fileref kopiert - PROC HTTP in= mit
+                       recfm=n-Fileref hat sich server-verifiziert gegen
+                       einen echten Endpunkt (Wikidata) als unzuverlaessig
+                       erwiesen (Query wurde kurz vor Ende abgeschnitten,
+                       obwohl die Quelldatei nachweislich vollstaendig war)
 
  Parameter (siehe Spec 3.2):
    endpoint=          (req)  SPARQL-Endpunkt-URL (http:// oder https://).
@@ -26,6 +35,10 @@
    out_fileref=       (req)  Fileref fuer Response-Body.
    headerout_fileref= (leer) Fileref fuer Response-Header (sonst intern).
    timeout=           60     Sekunden.
+   useragent=         SASparql-SAS-Macro/0.4.0  User-Agent-Header. Manche
+                       oeffentlichen Endpunkte (z. B. Wikidata) verlangen
+                       einen aussagekraeftigen Wert - bei Bedarf mit
+                       Kontaktinfo ueberschreiben.
    debug_nohttp=      N      Y = PROC HTTP ueberspringen (Test, Spec 3.4).
    debug=             N      zusaetzliche Log-Ausgabe.
 
@@ -35,8 +48,10 @@
    CONSTRUCT/DESCRIBE + TURTLE -> text/turtle
    CONSTRUCT/DESCRIBE + JSONLD -> application/ld+json
 
- VERIFY (ohne Runtime nicht pruefbar): urlencode()-Funktion fuer GET;
-   PROXYUSERNAME=/PROXYPASSWORD= in PROC HTTP (laut Nutzer ab 9.4M4 vorhanden).
+ Server-verifiziert (2026-09-16, tests/test_live_wikidata.sas gegen den
+   echten Wikidata-Endpunkt): urlencode()-Funktion fuer GET; PROXYUSERNAME=/
+   PROXYPASSWORD= in PROC HTTP; useragent=-Header. Keine offenen VERIFY-
+   Punkte mehr in diesem Makro.
 
  Rueckgabe:
    &sparql_rc (0=ok,1=Param,2=HTTP), &sparql_msg, &sparql_http_status
@@ -48,6 +63,7 @@
                       resultformat=, webuser=, webpassword=,
                       proxyhost=, proxyport=, proxyuser=, proxypassword=,
                       out_fileref=, headerout_fileref=, timeout=60,
+                      useragent=SASparql-SAS-Macro/0.3.0,
                       debug_nohttp=N, debug=N);
 
   %global sparql_rc sparql_msg sparql_http_status;
@@ -157,15 +173,36 @@
   %if (&method = GET) %then %do;
     %let inpath = %sysfunc(pathname(&in_fileref));
     %let geturl = ;
-    /* Query-Text roh lesen (recfm=n) und in EINEM urlencode() kodieren. */
+    /* Query-Text roh lesen (recfm=n) und in EINEM urlencode() kodieren.
+       _u ist wie _q auf $32767 begrenzt (server-verifiziertes SAS-Maximum
+       fuer Zeichenvariablen, ERROR 353-185 bei 65534 - 2026-09-15) - fuer
+       laengere Queries GET ohnehin ungeeignet (s. Grenzen, README/Spec 6.2). */
     data _null_;
-      length _q $32767 _u $65534;
+      length _q $32767 _u $32767;
       infile "&inpath" recfm=n lrecl=32767 length=_len;
       input _q $varying32767. _len;
       _u = cats("%superq(endpoint)",
                 ifc(index("%superq(endpoint)", '?') > 0, '&', '?'),
                 'query=', urlencode(strip(_q)));   /* VERIFY urlencode() */
       call symputx('geturl', _u, 'L');
+    run;
+  %end;
+
+  /* ================= POST: Query in normalen Fileref kopieren ======= */
+  %if (&method = POST) %then %do;
+    /* PROC HTTP in= mit einem recfm=n-Fileref hat sich server-verifiziert
+       als unzuverlaessig erwiesen: die letzten paar Byte des Query-Texts
+       gingen beim Versand verloren, obwohl die Quelldatei nachweislich
+       vollstaendig war (2026-09-16, Wikidata: "Encountered <EOF>" kurz vor
+       der schliessenden Klammer). Deshalb den Query-Text vor PROC HTTP in
+       einen normalen (nicht recfm=n) Fileref kopieren. */
+    filename _sqpost temp;
+    data _null_;
+      length _buf $32767;
+      infile "%sysfunc(pathname(&in_fileref))" recfm=n lrecl=32767 length=_len;
+      input _buf $varying32767. _len;
+      file _sqpost lrecl=32767;
+      put _buf $varying32767. _len;
     run;
   %end;
 
@@ -177,7 +214,7 @@
     proc http
         url="%superq(endpoint)"
         method="post"
-        in=&in_fileref
+        in=_sqpost
         ct="application/sparql-query"
         out=&out_fileref
         headerout=&headerout_fileref
@@ -193,7 +230,8 @@
           %end;
         %end;
         ;
-        headers "Accept" = "&accept";
+        headers "Accept" = "&accept"
+                "User-Agent" = "%superq(useragent)";
     run;
   %end;
   %else %do;
@@ -214,7 +252,8 @@
           %end;
         %end;
         ;
-        headers "Accept" = "&accept";
+        headers "Accept" = "&accept"
+                "User-Agent" = "%superq(useragent)";
     run;
   %end;
 
@@ -231,6 +270,7 @@
 
   /* interne headerout aufraeumen */
   %if (&ownhdr and &debug ne Y) %then %do; filename _sqhdr clear; %end;
+  %if (&method = POST and &debug ne Y) %then %do; filename _sqpost clear; %end;
 
   /* rc aus Status (2xx = ok) */
   %if not (&sparql_http_status >= 200 and &sparql_http_status <= 299) %then %do;

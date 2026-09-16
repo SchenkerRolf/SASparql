@@ -3,11 +3,12 @@
  Zweck    : Orchestrator / oeffentliche API. Baut die Query auf, fuehrt genau
             einen HTTP-Aufruf aus und parst die Response zu Dataset/RDF-Datei.
  Autor    : <TODO>
- Version  : 0.2.0
+ Version  : 0.3.0
  Aenderungen:
    YYYY-MM-DD  Name   Beschreibung
    2026-09-14  init   Initiales Geruest gemaess Spec 3.4
    2026-09-14  impl   Ablauf 1-6, Tempnamen (Spec 2.2), problemhandling
+   2026-09-15  ua     useragent= durchgereicht (s. sparql_execute.sas)
 
  Parameter (Vereinigung 3.1-3.3, plus):
    problemhandling=  ABORTCANCEL  ABORTCANCEL | RETURN.
@@ -17,7 +18,7 @@
    tempnamestem=     (leer)       Default automatisch eindeutig (Spec 2.2):
                      temp-sparqlquery-<user>-<jobid>-<ts>-<counter>
    (weitere: query=, queryfile=, endpoint=, method=, queryform=,
-    resultformat=, webuser=, webpassword=, proxy*=, timeout=,
+    resultformat=, webuser=, webpassword=, proxy*=, timeout=, useragent=,
     resultdsn=, resultfile=, debug_previewlines=)
 
  Diagnose: &sparql_last_stem (global) = zuletzt verwendeter Tempnamen-Stamm
@@ -41,7 +42,7 @@
                    method=POST, queryform=SELECT, resultformat=,
                    webuser=, webpassword=,
                    proxyhost=, proxyport=, proxyuser=, proxypassword=,
-                   timeout=60,
+                   timeout=60, useragent=SASparql-SAS-Macro/0.3.0,
                    resultdsn=queryresult, resultfile=,
                    problemhandling=ABORTCANCEL,
                    debug=N, debug_nohttp=N, showresponse=Y,
@@ -105,7 +106,7 @@
                   webuser=%superq(webuser), webpassword=%superq(webpassword),
                   proxyhost=%superq(proxyhost), proxyport=%superq(proxyport),
                   proxyuser=%superq(proxyuser), proxypassword=%superq(proxypassword),
-                  out_fileref=&rref, timeout=&timeout,
+                  out_fileref=&rref, timeout=&timeout, useragent=%superq(useragent),
                   debug_nohttp=&debug_nohttp, debug=&debug);
 
   /* ================= 4. Status / Fehler (V8) ======================== */
